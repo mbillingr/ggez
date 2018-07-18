@@ -11,7 +11,8 @@ use std::mem;
 use std::path;
 use std::time;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mint;
 use rodio;
@@ -122,6 +123,7 @@ pub struct Source {
     repeat: bool,
     fade_in: time::Duration,
     pitch: f32,
+    counter: Arc<AtomicUsize>,
 }
 
 impl Source {
@@ -142,6 +144,7 @@ impl Source {
             repeat: false,
             fade_in: time::Duration::from_millis(0),
             pitch: 1.0,
+            counter: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -166,6 +169,9 @@ impl Source {
         use rodio::Source;
         let cursor = self.data.clone();
         let sound = rodio::Decoder::new(cursor)?;
+
+        let mut counter = self.counter.clone();
+        let sound = sound.periodic_access(time::Duration::from_millis(5), move |_| {let _ = counter.fetch_add(5, Ordering::SeqCst);});
 
         // todo: this is getting ugly but a match wouldn't be much better. any ideas, anyone?
         if (self.pitch - 1.0).abs() < 1e-6 {
@@ -265,6 +271,7 @@ impl Source {
         // customizable.
         let device = rodio::default_output_device().unwrap();
         self.sink = rodio::Sink::new(&device);
+        self.counter.store(0, Ordering::SeqCst);
     }
 
     /// Returns whether or not the source is stopped
@@ -292,6 +299,10 @@ impl Source {
     /// and not stopped)
     pub fn playing(&self) -> bool {
         !self.paused() && !self.stopped()
+    }
+
+    pub fn samples_played(&self) -> usize {
+        self.counter.load(Ordering::SeqCst)
     }
 }
 
@@ -516,4 +527,60 @@ impl fmt::Debug for SpatialSource {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "<Spatial audio source: {:p}>", self)
     }
+}
+
+#[test]
+fn test_playing() {
+    use super::conf;
+    use std::thread::sleep_ms;
+
+    let c = conf::Conf::new();
+    let (ctx, events_loop) = &mut Context::load_from_conf("super_simple", "ggez", c).unwrap();
+
+    let mut sound = Source::new(ctx, "/pew.ogg").unwrap();
+
+    sound.set_fade_in(time::Duration::from_millis(100));
+    sound.set_pitch(1.0);
+
+    sound.play_later().unwrap();
+    sleep_ms(50);
+    println!("{}", sound.samples_played());
+    sound.play_later().unwrap();
+    sleep_ms(50);
+    println!("{}", sound.samples_played());
+    sound.play_later().unwrap();
+    sleep_ms(1000);
+    println!("{}", sound.samples_played());
+
+    sound.play().unwrap();
+    sleep_ms(50);
+    println!("{}", sound.samples_played());
+    sound.play().unwrap();
+    sleep_ms(50);
+    println!("{}", sound.samples_played());
+    sound.play().unwrap();
+    sleep_ms(50);
+    println!("{}", sound.samples_played());
+    sound.play().unwrap();
+    sleep_ms(50);
+    println!("{}", sound.samples_played());
+    sound.play().unwrap();
+    sleep_ms(1000);
+    println!("{}", sound.samples_played());
+
+    sound.play_detached().unwrap();
+    sleep_ms(50);
+    println!("{}", sound.samples_played());
+    sound.play_detached().unwrap();
+    sleep_ms(50);
+    println!("{}", sound.samples_played());
+    sound.play_detached().unwrap();
+    sleep_ms(50);
+    println!("{}", sound.samples_played());
+    sound.play_detached().unwrap();
+    sleep_ms(50);
+    println!("{}", sound.samples_played());
+    sound.play_detached().unwrap();
+    sleep_ms(1000);
+    println!("{}", sound.samples_played());
 }
